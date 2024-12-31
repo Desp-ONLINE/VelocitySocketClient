@@ -18,21 +18,25 @@ import java.util.concurrent.Executors;
 
 public class SocketClient {
 
+    public static final String SEPARATOR = "╊┞○@";
     public static final String REQUEST = "Request:"; // 요청
     public static final String RESPONSE = "Response:"; // 응답
     public static final String ACKNOWLEDGMENT = "ResponsePort:"; // 승인
+    public static final String CLOSE = "Close:"; // 승인
+    public static final String REFRESH_CONNECT_AMOUNT = "RefreshConnectAmount:";
 
     private final Socket socket;
     @Getter
     private final int localPort;
-    public final String SEPARATOR = "╊┞○@";
     private final BufferedReader reader;
     private final BufferedWriter writer;
     private final int portLength;
     private final Map<String, VelocitySocketListener> listeners = new HashMap<>();
 
     private final Map<String, Object> responseLocks = new HashMap<>(); // 이새끼 안해서 3시간 삽질
-    private final Object responseLock = new Object(); // 이새끼 안해서 3시간 삽질
+    private int connectedCount = 0;
+
+    //TODO 클라이언트 아이디 List로 받아와서 순차적으로 request & response.
 
     @Getter
     private Thread thread;
@@ -60,7 +64,13 @@ public class SocketClient {
         while (true) {
             try {
                 String read = reader.readLine();
-                if (read == null) {
+                if (read == null || read.isEmpty()) {
+                    continue;
+                }
+
+                if (read.startsWith(REFRESH_CONNECT_AMOUNT)) {
+                    read = read.substring(REFRESH_CONNECT_AMOUNT.length());
+                    connectedCount = Integer.parseInt(read);
                     continue;
                 }
 
@@ -150,7 +160,7 @@ public class SocketClient {
         ExecutorService executorService = Executors.newSingleThreadExecutor();
         executorService.execute(() -> {
             synchronized (this) {
-                SocketResponse request = request(socketListenerClass);
+                SocketResponse request = request(socketListenerClass, requestContents);
                 responseCallback.accept(request);
                 executorService.shutdown();
             }
@@ -162,6 +172,7 @@ public class SocketClient {
         String listenerKey = validateSocketListener(socketListenerClass);
         SocketListener listener = listeners.get(listenerKey);
 
+        Object responseLock = new Object();
         responseLocks.put(listener.getId(), responseLock);
 
         String requestContent = String.join(SEPARATOR, requestContents);
@@ -171,6 +182,7 @@ public class SocketClient {
             try {
                 responseLock.wait();
             } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
             }
         }
 
@@ -194,6 +206,7 @@ public class SocketClient {
 
     public void close() {
         listeners.clear();
+        send(CLOSE);
         try {
             socket.close();
         } catch (IOException ignored) {
@@ -217,5 +230,4 @@ public class SocketClient {
             throw new RuntimeException(e);
         }
     }
-
 }

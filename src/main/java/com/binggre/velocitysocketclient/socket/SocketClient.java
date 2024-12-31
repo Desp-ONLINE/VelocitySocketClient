@@ -28,12 +28,14 @@ public class SocketClient {
     public final String SEPARATOR = "╊┞○@";
     private final BufferedReader reader;
     private final BufferedWriter writer;
-    private final ExecutorService executor;
     private final int portLength;
     private final Map<String, VelocitySocketListener> listeners = new HashMap<>();
 
     private final Map<String, Object> responseLocks = new HashMap<>(); // 이새끼 안해서 3시간 삽질
     private final Object responseLock = new Object(); // 이새끼 안해서 3시간 삽질
+
+    @Getter
+    private Thread thread;
 
     public SocketClient(String ip, int port) {
         try {
@@ -43,14 +45,15 @@ public class SocketClient {
 
             localPort = socket.getLocalPort();
             portLength = String.valueOf(localPort).length();
-            executor = Executors.newSingleThreadExecutor();
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
     }
 
     public void connect() {
-        executor.execute(this::handleIncomingMessages);
+        Thread thread = new Thread(this::handleIncomingMessages);
+        this.thread = thread;
+        thread.start();
     }
 
     private void handleIncomingMessages() {
@@ -102,12 +105,14 @@ public class SocketClient {
             }
 
             if (isResponse) {
-                SocketResponse response = listener.onRequest();
+                String removedId = read.substring(listener.getId().length());
+                String[] requestContents = removedId.split(SEPARATOR);
+                SocketResponse response = listener.onRequest(requestContents);
                 sendResponse(listener, responsePort, response);
             } else if (isAcknowledgment) {
                 handleAcknowledgment(read, listener);
             } else {
-                deliverMessages(read, listener);
+                onlySendMessages(read, listener);
             }
             break;
         }
@@ -135,20 +140,13 @@ public class SocketClient {
         }
     }
 
-    private void deliverMessages(String read, VelocitySocketListener listener) {
+    private void onlySendMessages(String read, VelocitySocketListener listener) {
         String content = read.substring(listener.getId().length());
         String[] messages = content.split(SEPARATOR);
         listener.onReceive(messages);
     }
 
-    public void send(Class<? extends VelocitySocketListener> socketListenerClass, String... messages) {
-        String listenerKey = validateSocketListener(socketListenerClass);
-        SocketListener listener = listeners.get(listenerKey);
-        String message = String.join(SEPARATOR, messages);
-        send(listener.getId() + message);
-    }
-
-    public void requestAsync(Class<? extends VelocitySocketListener> socketListenerClass, @NotNull Callback<SocketResponse> responseCallback) {
+    public void requestAsync(Class<? extends VelocitySocketListener> socketListenerClass, @NotNull Callback<SocketResponse> responseCallback, String... requestContents) {
         ExecutorService executorService = Executors.newSingleThreadExecutor();
         executorService.execute(() -> {
             synchronized (this) {
@@ -160,12 +158,14 @@ public class SocketClient {
     }
 
     @NotNull
-    public SocketResponse request(Class<? extends VelocitySocketListener> socketListenerClass) {
+    public SocketResponse request(Class<? extends VelocitySocketListener> socketListenerClass, String... requestContents) {
         String listenerKey = validateSocketListener(socketListenerClass);
         SocketListener listener = listeners.get(listenerKey);
 
         responseLocks.put(listener.getId(), responseLock);
-        send(REQUEST + listener.getId());
+
+        String requestContent = String.join(SEPARATOR, requestContents);
+        send(REQUEST + listener.getId() + requestContent);
 
         synchronized (responseLock) {
             try {
@@ -175,6 +175,29 @@ public class SocketClient {
         }
 
         return listener.getLatestResponse();
+    }
+
+    public void send(Class<? extends VelocitySocketListener> socketListenerClass, String... messages) {
+        String listenerKey = validateSocketListener(socketListenerClass);
+        SocketListener listener = listeners.get(listenerKey);
+        String message = String.join(SEPARATOR, messages);
+        send(listener.getId() + message);
+    }
+
+    public void send(String message) {
+        try {
+            writer.write(message + "\n");
+            writer.flush();
+        } catch (Exception ignored) {
+        }
+    }
+
+    public void close() {
+        listeners.clear();
+        try {
+            socket.close();
+        } catch (IOException ignored) {
+        }
     }
 
     private String validateSocketListener(Class<? extends VelocitySocketListener> socketListenerClass) {
@@ -195,20 +218,4 @@ public class SocketClient {
         }
     }
 
-    public void send(String message) {
-        try {
-            writer.write(message + "\n");
-            writer.flush();
-        } catch (Exception ignored) {
-        }
-    }
-
-    public void close() {
-        listeners.clear();
-        executor.shutdown();
-        try {
-            socket.close();
-        } catch (IOException ignored) {
-        }
-    }
 }

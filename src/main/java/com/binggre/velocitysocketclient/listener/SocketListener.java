@@ -6,7 +6,7 @@ public interface SocketListener {
 
     void onReceive(String[] messages);
 
-    SocketResponse onRequest();
+    SocketResponse onRequest(String... requestContents);
 
     void onResponse(SocketResponse response);
 

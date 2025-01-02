@@ -21,6 +21,14 @@ public class SocketResponse {
         return messages == null || messages.length == 0;
     }
 
+    public boolean isOk() {
+        return !isEmpty();
+    }
+
+    public static SocketResponse empty() {
+        return new SocketResponse(null);
+    }
+
     public static SocketResponse ok(String... messages) {
         return new SocketResponse(messages);
     }

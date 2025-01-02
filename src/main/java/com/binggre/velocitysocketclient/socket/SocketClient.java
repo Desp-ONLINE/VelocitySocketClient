@@ -11,7 +11,9 @@ import java.io.*;
 import java.lang.reflect.InvocationTargetException;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -23,7 +25,7 @@ public class SocketClient {
     public static final String RESPONSE = "Response:"; // 응답
     public static final String ACKNOWLEDGMENT = "ResponsePort:"; // 승인
     public static final String CLOSE = "Close:"; // 승인
-    public static final String REFRESH_CONNECT_AMOUNT = "RefreshConnectAmount:";
+    public static final String REFRESH_CONNECT_LIST = "RefreshConnectList:";
 
     private final Socket socket;
     @Getter
@@ -33,10 +35,8 @@ public class SocketClient {
     private final int portLength;
     private final Map<String, VelocitySocketListener> listeners = new HashMap<>();
 
-    private final Map<String, Object> responseLocks = new HashMap<>(); // 이새끼 안해서 3시간 삽질
-    private int connectedCount = 0;
-
-    //TODO 클라이언트 아이디 List로 받아와서 순차적으로 request & response.
+    private final Map<String, Object> responseLocks = new HashMap<>();
+    private final List<Integer> connectedSocketList = new ArrayList<>();
 
     @Getter
     private Thread thread;
@@ -68,9 +68,13 @@ public class SocketClient {
                     continue;
                 }
 
-                if (read.startsWith(REFRESH_CONNECT_AMOUNT)) {
-                    read = read.substring(REFRESH_CONNECT_AMOUNT.length());
-                    connectedCount = Integer.parseInt(read);
+                if (read.startsWith(REFRESH_CONNECT_LIST)) {
+                    read = read.substring(REFRESH_CONNECT_LIST.length());
+                    connectedSocketList.clear();
+                    String[] split = read.split("");
+                    for (String id : split) {
+                        connectedSocketList.add(Integer.parseInt(id));
+                    }
                     continue;
                 }
 
@@ -162,31 +166,39 @@ public class SocketClient {
             synchronized (this) {
                 SocketResponse request = request(socketListenerClass, requestContents);
                 responseCallback.accept(request);
-                executorService.shutdown();
             }
         });
+        executorService.shutdown();
     }
 
     @NotNull
     public SocketResponse request(Class<? extends VelocitySocketListener> socketListenerClass, String... requestContents) {
         String listenerKey = validateSocketListener(socketListenerClass);
-        SocketListener listener = listeners.get(listenerKey);
+        VelocitySocketListener listener = listeners.get(listenerKey);
 
-        Object responseLock = new Object();
-        responseLocks.put(listener.getId(), responseLock);
+        for (Integer socketId : connectedSocketList) {
+            Object responseLock = new Object();
+            responseLocks.put(listener.getId(), responseLock);
 
-        String requestContent = String.join(SEPARATOR, requestContents);
-        send(REQUEST + listener.getId() + requestContent);
+            String requestContent = String.join(SEPARATOR, requestContents);
+            send(REQUEST + socketId + listener.getId() + requestContent);
 
-        synchronized (responseLock) {
-            try {
-                responseLock.wait();
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
+            synchronized (responseLock) {
+                try {
+                    responseLock.wait(50);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+
+            SocketResponse latestResponse = listener.getLatestResponse();
+            if (latestResponse != null && !latestResponse.isEmpty()) {
+                listener.setLatestResponse(null);
+                return latestResponse;
             }
         }
 
-        return listener.getLatestResponse();
+        return SocketResponse.ok(); // Return an empty response if no response is received from any socket.
     }
 
     public void send(Class<? extends VelocitySocketListener> socketListenerClass, String... messages) {

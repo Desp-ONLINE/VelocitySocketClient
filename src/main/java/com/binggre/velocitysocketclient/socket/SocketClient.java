@@ -56,6 +56,7 @@ public class SocketClient {
 
     public void connect() {
         Thread thread = new Thread(this::handleIncomingMessages);
+        thread.setDaemon(true);
         this.thread = thread;
         thread.start();
     }
@@ -185,7 +186,7 @@ public class SocketClient {
 
             synchronized (responseLock) {
                 try {
-                    responseLock.wait(50);
+                    responseLock.wait(10);
                 } catch (InterruptedException ignored) {
                     Thread.currentThread().interrupt();
                 }
@@ -198,7 +199,7 @@ public class SocketClient {
             }
         }
 
-        return SocketResponse.ok(); // Return an empty response if no response is received from any socket.
+        return SocketResponse.ok();
     }
 
     public void send(Class<? extends VelocitySocketListener> socketListenerClass, String... messages) {
